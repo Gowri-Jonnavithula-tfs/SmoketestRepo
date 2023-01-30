@@ -1,0 +1,144 @@
+import org.apache.tools.ant.filters.ReplaceTokens
+import org.apache.tools.ant.taskdefs.condition.Os
+
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath "org.jfrog.buildinfo:build-info-extractor-gradle:4+"
+    }
+}
+
+plugins {
+    id 'java'
+    id 'java-library'
+    id 'maven-publish'
+    id "com.jfrog.artifactory" version "4.21.0"
+}
+
+sourceCompatibility = 11
+targetCompatibility = 11
+
+repositories {
+    mavenCentral()
+    maven {
+        url "${artifactory_contextUrl}/${artifactory_repo}"
+        credentials {
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+        }
+    }
+}
+
+dependencies {
+
+    implementation group: 'com.thermofisher.dependencies', name: 'DSBU_Automation_Framework', version: '2.0'
+
+    // https://mvnrepository.com/artifact/org.seleniumhq.selenium/selenium-java
+    implementation group: 'org.seleniumhq.selenium', name: 'selenium-java', version: '3.141.59'
+
+    // https://mvnrepository.com/artifact/io.cucumber/cucumber-java
+    implementation group: 'io.cucumber', name: 'cucumber-java', version: '7.0.0'
+
+    // https://mvnrepository.com/artifact/io.cucumber/cucumber-testng
+    implementation group: 'io.cucumber', name: 'cucumber-testng', version: '7.0.0'
+
+    // https://mvnrepository.com/artifact/io.cucumber/cucumber-picocontainer
+    testImplementation group: 'io.cucumber', name: 'cucumber-picocontainer', version: '7.0.0'
+
+    // https://mvnrepository.com/artifact/io.github.bonigarcia/webdrivermanager
+    implementation group: 'io.github.bonigarcia', name: 'webdrivermanager', version: '5.0.3'
+
+    // https://mvnrepository.com/artifact/com.aventstack/extentreports
+    implementation group: 'com.aventstack', name: 'extentreports', version: '5.0.7'
+
+    // https://mvnrepository.com/artifact/org.apache.clerezza.ext/org.json.simple
+    implementation group: 'org.apache.clerezza.ext', name: 'org.json.simple', version: '0.4'
+
+    // https://mvnrepository.com/artifact/io.rest-assured/rest-assured
+    implementation group: 'io.rest-assured', name: 'rest-assured', version: '4.4.0'
+
+    // https://mvnrepository.com/artifact/org.apache.commons/commons-configuration2
+    implementation group: 'org.apache.commons', name: 'commons-configuration2', version: '2.7'
+
+    // https://mvnrepository.com/artifact/commons-beanutils/commons-beanutils
+    implementation group: 'commons-beanutils', name: 'commons-beanutils', version: '1.9.4'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            version = '1.0-SNAPSHOT'
+            group = 'com.thermofisher.dependencies'
+            artifactId = 'DSBU_EDS_TestAutomation'
+            from components.java
+        }
+    }
+}
+
+artifactory {
+    contextUrl = "${artifactory_contextUrl}"   //The base Artifactory URL if not overridden by the publisher/resolver
+    publish {
+        repository {
+            repoKey = "${artifactory_repo}"
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+            maven = true
+        }
+        defaults {
+            publications('mavenJava')
+        }
+    }
+    resolve {
+        repository {
+            repoKey = "${artifactory_repo_resolve}"
+            username = "${artifactory_user}"
+            password = "${artifactory_password}"
+            maven = true
+        }
+    }
+}
+task exportFeatureFiles(type: Exec) {
+    workingDir projectDir
+    if (Os.isFamily(Os.FAMILY_WINDOWS)) {
+        commandLine 'cmd', '/c', 'Tools/export_features.bat'
+    } else {
+        executable "bash"
+        args "-c", "bash Tools/export_features.sh "+System.getProperty("TestExecutionKey", "")
+    }
+}
+
+task updateFrameworkProperties(type: Copy) {
+    from 'src/main/resources/tokenFiles/framework.properties'
+    into 'src/main/resources'
+    filter(ReplaceTokens, tokens: [
+            UploadResultsToXRay : System.getProperty("UploadResults", "false"),
+            XRayTestExecutionKey: System.getProperty("TestExecutionKey", "")
+    ])
+}
+
+task updateAppProperties(type: Copy, dependsOn: ['exportFeatureFiles', 'updateFrameworkProperties']) {
+    String propertiesFileName = System.getProperty("Environment", "test")+".properties"
+    from 'src/test/resources/tokenFiles/' + propertiesFileName
+    into 'src/test/resources'
+    rename(propertiesFileName, 'AppSettings.properties')
+    filter(ReplaceTokens, tokens: [
+            Browser: System.getProperty("Browser", "Chrome")
+    ])
+}
+
+test {
+    useTestNG() {
+        systemProperties(System.properties)
+        dependsOn updateAppProperties
+        suites 'src/test/resources/testNG/CucumberTests.xml'
+        jvmArgs(["-Ddataproviderthreadcount=3"])
+        scanForTestClasses false
+        useDefaultListeners = true
+        outputDirectory = file("$projectDir/testng-output")
+    }
+    testLogging {
+        exceptionFormat "full"
+    }
+}
